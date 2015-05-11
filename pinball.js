@@ -7,8 +7,10 @@
   var height=140;
   var zoomFactor=4;
   var radius=5;
+  var stateIndex=0;
   var canvasIndex=0;
   var canvasses = new Array();
+  var VERSION=2;
   for (var i=0;i<16;i++){
     canvasses[i] = new Uint8Array(width*height);
   }
@@ -30,6 +32,12 @@
   var lastY=-1;
   var shareLinkInner;
   var mainPaletteOffset=0;
+  var layerCount=6;
+
+  var levelCanvasses = new Array();
+  for (var i=0;i<layerCount;i++){
+    levelCanvasses[i] = new Uint8Array(width*height);
+  }
 
   var lastDrawPosX=-1;
   var lastDrawPosY=-1;
@@ -45,8 +53,8 @@
   var regionTypes = [];
 
   var masterCanvas = new Uint8Array(width*height);
+  var gameLevelCount=1;
 
-  
 
 /*
 //arne
@@ -96,6 +104,10 @@
 
   var colorPalette = sourcePalette;
 
+    var layerElem = new Array();
+  var thumbnailCanvas = new Array();
+  var thumbnailContext = new Array();
+
 var eraserCol=0;
 var wallCol=2;
 var bumperCol=3;
@@ -116,7 +128,7 @@ var springCol=12;
 
 var lastPlacedLeftPivot=false;
 /*
-//spectrum 
+//spectrum
   var colorPalette = [
             "#000000",
             "#888888",
@@ -242,7 +254,7 @@ function connectCables(region1,region2){
     var tr = region1;
     region1=region2;
     region2=tr;
-  } 
+  }
 
 
   if (r2===null){
@@ -253,7 +265,7 @@ function connectCables(region1,region2){
 
   if (r1===null){
     r1=[region1];
-  } else{  
+  } else{
     connections.splice(r1i,1);
   }
 
@@ -318,11 +330,11 @@ function shareClick() {
   var githubURL = 'https://api.github.com/gists';
   var githubHTTPClient = new XMLHttpRequest();
   githubHTTPClient.open('POST', githubURL);
-  githubHTTPClient.onreadystatechange = function() {    
+  githubHTTPClient.onreadystatechange = function() {
     var errorCount=0;
     if(githubHTTPClient.readyState!=4) {
       return;
-    }   
+    }
     var result = JSON.parse(githubHTTPClient.responseText);
     if (githubHTTPClient.status===403) {
       errorCount++;
@@ -347,7 +359,11 @@ function shareClick() {
         alert("Cannot link directly to playable game, because there are errors.",true);
       } else {
 
-      } 
+      }
+
+      if(PLAYER!==true){
+        window.history.pushState({}, "plingpling game maker", "index.html?p="+id);
+      }
 
 
     }
@@ -355,7 +371,7 @@ function shareClick() {
   githubHTTPClient.setRequestHeader("Content-type","application/x-www-form-urlencoded");
   var stringifiedGist = JSON.stringify(gistToCreate);
   githubHTTPClient.send(stringifiedGist);
-  lastDownTarget=masterCanvas;  
+  lastDownTarget=masterCanvas;
 }
 
 function RLE_encode(input) {
@@ -368,7 +384,7 @@ function RLE_encode(input) {
             count = 1;
             prev = input[i];
         }
-        else 
+        else
             count ++;
     }
     encoding.push(count);
@@ -387,15 +403,17 @@ function stateToString(){
   state.gameTitle=gameTitle;
   state.winText=winText;
   state.gameLink=gameLink;
+  state.canvasIndex=canvasIndex;
   state.canvasses=new Array();
   state.mainPaletteOffset=mainPaletteOffset;
-  for (var i=0;i<16;i++){
-    var canvas=canvasses[i];
+  state.version=VERSION;
+  for (var i=0;i<layerCount;i++){
+    var canvas=levelCanvasses[i];
     var s="";
     for (var j=0;j<width*height;j++){
       s+=canvas[j].toString(16);
     }
-    var pairs=RLE_encode(s);    
+    var pairs=RLE_encode(s);
     state.canvasses.push(pairs);
   }
   var result=JSON.stringify(state);
@@ -417,6 +435,11 @@ function stringToState(str){
   gameTitle=state.gameTitle;
   winText=state.winText;
   gameLink=state.gameLink;
+  version = state.version;
+  if (state.version==null){
+    state.version=1;
+  }
+
     mainPaletteOffset=0;
     var k = localStorage.getItem(makeKey('highScore'));
     highScore = k | 0;
@@ -424,11 +447,21 @@ function stringToState(str){
     cyclePalette(state.mainPaletteOffset);
   } else {
   }
-  canvasIndex=0;
-  canvasses=new Array();
-  for (var k=0;k<state.canvasses.length;k++){
+  stateIndex=0;
+
+  canvasIndex = state.canvasIndex;
+  if (canvasIndex==null){
+    canvasIndex = 0;
+  }
+
+  levelCanvasses = new Array();
+  for (var k=0;k<layerCount;k++){
     var s = state.canvasses[k];
     var ar = new Uint8Array(width*height);
+    levelCanvasses.push(ar);
+    if (state.version===1&&k>0){
+      continue;
+    }
     var index=0;
     for (var i=0;i<s.length;i+=2){
       var count=s[i];
@@ -438,10 +471,10 @@ function stringToState(str){
         index++;
       }
     }
-    canvasses.push(ar);
   }
 
-  masterCanvas =uint8ar_copy(canvasses[0]);
+  setLevel(1);
+  stateIndex=0;
   compile();
   setScoreText(true);
 }
@@ -458,7 +491,7 @@ var keyBuffer=[];
 
 function applyCanvasSweep(sweepArea){
   var x = Math.round(bpx);
-  var y = Math.round(bpy);    
+  var y = Math.round(bpy);
   var points = [
                               [x+1,y+0],[x+2,y+0],
                   [x+0,y+1],[x+1,y+1],[x+2,y+1],[x+3,y+1],
@@ -529,15 +562,15 @@ var hasLeftPaddle=true;
 var hasRightPaddle=true;
 var hasSpring=true;
 
-function interpolateAreas(oldCanvasIndex,newCanvasIndex){
-  var oldLeft = oldCanvasIndex%2;
-  var newLeft = newCanvasIndex%2;
+function interpolateAreas(oldstateIndex,newstateIndex){
+  var oldLeft = oldstateIndex%2;
+  var newLeft = newstateIndex%2;
 
-  var oldRight = (Math.floor(oldCanvasIndex/2))%2;
-  var newRight = (Math.floor(newCanvasIndex/2))%2;
+  var oldRight = (Math.floor(oldstateIndex/2))%2;
+  var newRight = (Math.floor(newstateIndex/2))%2;
 
-  var oldDown = (Math.floor(oldCanvasIndex/4))%2;
-  var newDown = (Math.floor(newCanvasIndex/4))%2;
+  var oldDown = (Math.floor(oldstateIndex/4))%2;
+  var newDown = (Math.floor(newstateIndex/4))%2;
 
   if (oldDown===1&&newDown===0){
     if (hasSpring){
@@ -545,20 +578,20 @@ function interpolateAreas(oldCanvasIndex,newCanvasIndex){
     }
   } else if (oldDown===0&&newDown===1){
     if (hasSpring){
-      playSound(67535707,true);    
+      playSound(67535707,true);
     }
   } else if ((oldLeft===0&&newLeft===1)){
     if (hasLeftPaddle){
       playSound(64004107,true);
-    } 
+    }
   }else if (oldRight===0&&newRight===1){
       if (hasRightPaddle){
         playSound(64004107,true);
       }
   }
-  
 
-  var result = [oldCanvasIndex];
+
+  var result = [oldstateIndex];
   if (oldLeft!=newLeft){
     var newItem = result[result.length-1]-oldLeft+newLeft;
     result.push(newItem);
@@ -574,22 +607,22 @@ function interpolateAreas(oldCanvasIndex,newCanvasIndex){
   return result;
 }
 
-function setCanvasIndex(oldCanvasIndex,newCanvasIndex){
+function setstateIndex(oldstateIndex,newstateIndex){
   if (dirty){
     compile();
   }
 
-  var steps = interpolateAreas(oldCanvasIndex,newCanvasIndex);
+  var steps = interpolateAreas(oldstateIndex,newstateIndex);
   for (var i=0;i<steps.length-1;i++){
     var source = steps[i];
     var target = steps[i+1];
-    
+
     var sweepArea =  sweepAreas[source][target];
 
     if (sweepArea==null){
-      console.log( "setCanvasIndex not found " + source+" -> " + target );
+      console.log( "setstateIndex not found " + source+" -> " + target );
       return;
-    } 
+    }
 
     applyCanvasSweep( sweepArea );
   }
@@ -597,22 +630,22 @@ function setCanvasIndex(oldCanvasIndex,newCanvasIndex){
 
 var tilting=false;
 
-function setFlipperCanvas(){  
-  var oldCanvasIndex=canvasIndex;
-  canvasIndex=0;
+function setFlipperCanvas(){
+  var oldstateIndex=stateIndex;
+  stateIndex=0;
   if (keyBuffer[37]===true){//left
-    canvasIndex=1;
-  } 
+    stateIndex=1;
+  }
   if (keyBuffer[39]===true){//right
-    canvasIndex+=2;
+    stateIndex+=2;
   }
   if (keyBuffer[40]===true){//down
-    canvasIndex+=4;
+    stateIndex+=4;
   }
   tilting = keyBuffer[38];//up
 
-  if (oldCanvasIndex!=canvasIndex){
-    setCanvasIndex(oldCanvasIndex,canvasIndex);
+  if (oldstateIndex!=stateIndex){
+    setstateIndex(oldstateIndex,stateIndex);
     //38 is up
     //40 is down
     setVisuals();
@@ -634,6 +667,49 @@ function prevent(e) {
 }
 
 
+function setLevel(newCanvasIndex) {
+
+  canvasIndex=newCanvasIndex-1;
+  masterCanvas=levelCanvasses[canvasIndex];
+
+  if (PLAYER!==true){
+    for(var i=0;i<layerCount;i++){
+      if (layerElem[i]!==null){
+        layerElem[i].setAttribute("class","layerItem");
+      }
+    }
+    layerElem[canvasIndex].setAttribute("class","layerItem selectedItem");
+  }
+
+  compile();
+  setVisuals();
+}
+
+function drawThumbnail(n){
+  thumbCtx=thumbnailContext[n];
+  thumbCtx.fillStyle="#FF0000";
+  thumbCtx.fillRect(0,0,16,10);
+  var canvas=levelCanvasses[n];
+  for (var i=0;i<25;i++){
+    for (var j=0;j<28;j++){
+      var max=0;
+      for (var i2=0;i2<10;i2++){
+        for (var j2=0;j2<10;j2++){
+            var sample = canvas[i*5+i2+width*(j*5+j2)];
+            if (sample>max){
+              max=sample;
+            }
+        }
+      }
+      thumbCtx.fillStyle=colorPalette[max];
+      thumbCtx.fillRect(i,j,1,1);
+    }
+  }
+
+//      var dataUrl = thumbnailCanvas[n].toDataURL();
+//      "dropdownOption"[0][0].style.backgroundImage="url("+dataUrl+")";
+}
+
 function press(evt){
   evt = evt || window.event;
   keyBuffer[evt.keyCode]=true;
@@ -648,7 +724,7 @@ function press(evt){
   } else if (evt.keyCode==76){//L(oad)
     stringToState(savedString);
     setVisuals();
-    setLayer(canvasIndex+1); 
+    setLevel(stateIndex+1);
   } */
   if (evt.keyCode===188){
     cyclePalette(-1);
@@ -668,7 +744,7 @@ function press(evt){
     spawnBall();
   }else if (evt.keyCode===67) { //c
     copyImage=JSON.stringify(masterCanvas);
-    //copyImage=JSON.stringify(canvasses[canvasIndex])
+    //copyImage=JSON.stringify(canvasses[stateIndex])
   } else if (evt.keyCode===86){ //v
     if (copyImage!==null){
       preserveUndoState();
@@ -679,7 +755,7 @@ function press(evt){
       }
       masterCanvas=arui8;
       compile();
-      setVisuals();
+      setVisuals(true);
     }
   } else if (evt.keyCode ===189 || evt.keyCode===173 ) {//-
     var datArray = ['eraser', eraserCol,
@@ -727,7 +803,7 @@ function press(evt){
       var dat = undoList.pop();
       masterCanvas=dat.canvasDat;
       compile();
-      setVisuals();
+      setVisuals(true);
       if (shareLinkInner!=null){
         shareLinkInner.style.color="gray";
       }
@@ -742,7 +818,7 @@ function press(evt){
 
   var bucketElem;
   function titleChange(newTitle){
-    gameTitle=newTitle;    
+    gameTitle=newTitle;
   }
 
   function linkChange(newLink){
@@ -762,12 +838,11 @@ function clearPalette(){
     for (var i=0;i<basicCanvas.length;i++){
       basicCanvas[i]=masterCanvas[i];
     }
-
-  // prevent drawing of lastball after clear
-  speedX = 0;
-  speedY = 0;
-
-  setVisuals();
+    bpx=-1000;
+    bpy=-1000;
+    speedX=0;
+    speedY=0;
+  setVisuals(true);
 }
 
 
@@ -816,7 +891,7 @@ function ballCollides(){
                   x+0+width*(y+2),x+1+width*(y+2),x+2+width*(y+2),x+3+width*(y+2),
                               x+1+width*(y+3),x+2+width*(y+3)
                   ];
-  var canvas=canvasses[canvasIndex];
+  var canvas=canvasses[stateIndex];
 
   for (var i=0;i<indices.length;i++){
     var index = indices[i];
@@ -837,8 +912,8 @@ function ballCollides(){
   function activateSwitch(index){
     var regionNumber = regionCanvas[index];
     var bbox = boundingBoxes[regionNumber];
-    for (var x=bbox[0];x<=bbox[2];x++){      
-      for (var y=bbox[1];y<=bbox[3];y++){   
+    for (var x=bbox[0];x<=bbox[2];x++){
+      for (var y=bbox[1];y<=bbox[3];y++){
         var i = x+width*y;
         if (regionCanvas[i]===regionNumber){
           for (var j=0;j<canvasses.length;j++){
@@ -905,10 +980,10 @@ function ballCollides(){
 
       var bbox = boundingBoxes[rowRegionNum];
 
-      for (var x=bbox[0];x<=bbox[2];x++){      
+      for (var x=bbox[0];x<=bbox[2];x++){
         for (var y=bbox[1];y<=bbox[3];y++){
           var index = x+width*y;
-          if (regionCanvas[index]===rowRegionNum){            
+          if (regionCanvas[index]===rowRegionNum){
             for (var j=0;j<canvasses.length;j++){
               var canvas=canvasses[j];
               if (canvas[index]===togglableWallCol){
@@ -928,10 +1003,10 @@ function ballCollides(){
                     [0,1],[1,1],[2,1],[3,1],
                     [0,2],[1,2],[2,2],[3,2],
                           [1,3],[2,3]
-  ]
+  ];
   function collision(x,y){
 
-    var canvas=canvasses[canvasIndex];
+    var canvas=canvasses[stateIndex];
 
     var collisiondat = [];
     for (var i=0;i<ballOffsets.length;i++){
@@ -955,7 +1030,7 @@ function ballCollides(){
             val!==bumperAuraCol &&
             val!==ballSpawnCol &&
             val!==exitCol &&
-            val!==connectionCol && 
+            val!==connectionCol &&
             val!==targetActiveCol &&
             val!==togglableWallDisabledCol){
         var px = (index%width)+0.5;
@@ -1003,7 +1078,7 @@ function ballCollides(){
   var maxSpeed=3.0;
   var maxBallSpin=4.0;
   var spinDamp=0.0002;
-  function clampSpeed(){    
+  function clampSpeed(){
     var v=  [speedX,speedY];
     var speedMag = mag(v);
     if (speedMag>maxSpeed){
@@ -1047,11 +1122,11 @@ function ballCollides(){
 
     var oldSpeedX=speedX;
     var oldSpeedY=speedY;
-    var canvas=canvasses[canvasIndex];
+    var canvas=canvasses[stateIndex];
     if (bpx<-10){
       if ((PLAYER&&exitTriggered) || (tilting===true)){
         setVisuals();
-      } 
+      }
       return;
     }
     var G=0.002;
@@ -1096,7 +1171,7 @@ function ballCollides(){
           avgy=speedX;
         } else {
           return;
-        }  
+        }
       }
 
       var normal = normalized([avgx,avgy]);
@@ -1135,15 +1210,15 @@ function ballCollides(){
       //add 50% of spin to the bounce
       speedX=bounceDamp*refl[0];
       speedY=bounceDamp*refl[1];
-      
+
       leftV = [-normal[1],normal[0]];
       var ballSpinAmount=1.0;
       speedX+=ballSpinAmount*ballSpin*leftV[0]/2;
       speedY+=ballSpinAmount*ballSpin*leftV[1]/2;
 
-      ballSpin/=2;      
+      ballSpin/=2;
       ballSpin+=direction*mag([speedX,speedY])*(1-bounceDamp)/2.0;
-      
+
       clampSpeed();
       nx = bpx+speedX;
       ny = bpy+speedY;
@@ -1174,16 +1249,20 @@ function ballCollides(){
     var bpxr=Math.round(bpx);
     var bpyr=Math.round(bpy);
     if (exitTriggered ===false && bpxr<=exitPointX&&exitPointX<=bpxr+4 && bpyr<=exitPointY&&exitPointY<=bpyr+4 ){
-      exitTriggered=true;
+      if(canvasIndex+1<gameLevelCount){
+        setLevel(canvasIndex+2);
+        spawnBall();
+      } else {
+        exitTriggered=true;
+        wonindex=13;
+        bpx=-1000;
+        bpy=-1000;
+        alert(winText + "\n score : "+score);
+        setScoreText(true);
+        playSound(81031108);
+      }
       tilting=false;
       keyBuffer[38]=false;
-      wonindex=13;
-      bpx=-1000;
-      bpy=-1000;      
-      playSound(81031108);
-      canvasIndex=0;
-      alert(winText + "\n score : "+score);
-      setScoreText(true);
     }
     setVisuals();
   }
@@ -1191,7 +1270,7 @@ function ballCollides(){
     function init() {
       setInterval(tick, tickLength);
 
-      if (PLAYER===true){        
+      if (PLAYER===true){
         scoreText = document.getElementById("scoreText");
         highScoreText = document.getElementById("highScoreText");
         setScoreText();
@@ -1202,13 +1281,24 @@ function ballCollides(){
         linkInput=document.getElementById("linkInput");
         linkInput.value=gameLink;
 
+        for (var i=0;i<layerCount;i++){
+          elem = document.getElementById("thumbnail"+(i+1));
+          thumbnailCanvas[i]=elem;
+          thumbnailContext[i]=elem.getContext("2d");
+        }
+
+        for (var i=0;i<layerCount;i++){
+          elem = document.getElementById("layerItem"+(i+1));
+          layerElem[i]=elem;
+        }
+
         winTextInput=document.getElementById("winText");
         winTextInput.value=winText;
 
         var coloredElements = document.querySelectorAll("[id^=color_]");
         for(var queryIndex = 0; queryIndex < coloredElements.length; queryIndex ++){
           var elem = coloredElements[queryIndex];
-          if (elem!==null){       
+          if (elem!==null){
             var i = Number(elem.id.match(/color_([0-9]+)/)[1]);
             elem.style.backgroundColor=colorPalette[i];
             colorElem[i]=elem;
@@ -1218,7 +1308,7 @@ function ballCollides(){
         if (elem!==null){
             elem.style.backgroundColor=colorPalette[0];
         }
-      } 
+      }
 
       visibleCanvas = document.getElementById("mainCanvas");
 
@@ -1238,7 +1328,8 @@ function ballCollides(){
       visibleContext.imageSmoothingEnabled= false;
       id = visibleContext.createImageData(1,1); // only do this once per page
       id_d=id.data;
-      setVisuals();
+      setLevel(1);
+      setVisuals(true);
 
       getData();
       setScoreText(true);
@@ -1246,11 +1337,11 @@ function ballCollides(){
 
   function readFile(evt) {
     //Retrieve the first (and only!) File from the FileList object
-    var f = evt.target.files[0]; 
+    var f = evt.target.files[0];
 
     if (f) {
       var r = new FileReader();
-      r.onload = function(e) { 
+      r.onload = function(e) {
         var contents = e.target.result;
         //escapes below are to get around searching for a pattern in its own file messing things up
         var fromToken="\_\_EmbedBegin\_\_";
@@ -1262,10 +1353,11 @@ function ballCollides(){
         stringToState(decoded);
         setTexts();
         loaded=true;
-        setVisuals();
+        setLevel(canvasIndex+1);
+        setVisuals(true,true);
       }
       r.readAsText(f);
-    } else { 
+    } else {
       alert("Failed to load file");
     }
   }
@@ -1302,15 +1394,15 @@ function ballCollides(){
         titleInput.value=gameTitle;
         linkInput.value=gameLink;
         winTextInput.value=winText;
-    } 
+    }
   }
-  function getData(){ 
+  function getData(){
 
     if (embeddedDat[0]!=='_'){
       embeddedDat=decodeURI(embeddedDat);
 
       stringToState(embeddedDat);
-      setVisuals();
+      setVisuals(true,true);
       setTexts();
       loaded=true;
       return;
@@ -1318,7 +1410,7 @@ function ballCollides(){
 
     var id = getParameterByName("p").replace(/[\\\/]/,"");
     if (id===null||id.length===0) {
-      
+
       return;
     }
 
@@ -1332,7 +1424,7 @@ function ballCollides(){
       hacklink.href=url;
       hacklink.innerHTML="&sdotb; edit";
     }
-    
+
     var githubURL = 'https://api.github.com/gists/'+id;
 
     var githubHTTPClient = new XMLHttpRequest();
@@ -1340,7 +1432,7 @@ function ballCollides(){
     githubHTTPClient.onreadystatechange = function() {
       if(githubHTTPClient.readyState!=4) {
         return;
-      }   
+      }
       var result = JSON.parse(githubHTTPClient.responseText);
       if (githubHTTPClient.status===403) {
         alert(result.message);
@@ -1349,11 +1441,11 @@ function ballCollides(){
       }
       var result = JSON.parse(githubHTTPClient.responseText);
       var code=result["files"]["game.txt"]["content"];
-      
+
       stringToState(code);
       setTexts();
       loaded=true;
-      setVisuals();
+      setVisuals(true,true);
     }
     githubHTTPClient.setRequestHeader("Content-type","application/x-www-form-urlencoded");
     githubHTTPClient.send();
@@ -1366,7 +1458,7 @@ function ballCollides(){
 
   var wonindex=4;
 
-    function setVisuals(){
+    function setVisuals(genAnyThumbnails, genAllThumbnails){
       if (PLAYER&&loaded===false){
         visibleContext.fillStyle="#ff0000";
         visibleContext.fillRect(0,0,visibleCanvas.width/2,visibleCanvas.height/2);
@@ -1378,9 +1470,9 @@ function ballCollides(){
         visibleContext.fillRect(visibleCanvas.width/2,visibleCanvas.height/2,visibleCanvas.width/2,visibleCanvas.height/2);
         return;
       }
-      //visibleContext.drawImage(canvasses[canvasIndex], 0, 0); 
-      //visibleContext.drawImage(canvasses[canvasIndex], 0, 0,width*zoomFactor,height*zoomFactor); 
-      var canvas=canvasses[canvasIndex];
+      //visibleContext.drawImage(canvasses[stateIndex], 0, 0);
+      //visibleContext.drawImage(canvasses[stateIndex], 0, 0,width*zoomFactor,height*zoomFactor);
+      var canvas=canvasses[stateIndex];
       var zoom = zoomFactor;
       if (tilting){
         zoom-=Math.random()*0.1;
@@ -1398,10 +1490,10 @@ function ballCollides(){
             visibleContext.fillStyle=colorPalette[pixelIndex];
             if (pixelIndex===bumperCol && bumperHit>=0){
               if (regionCanvas[i+width*j]===bumperHit){
-                visibleContext.fillStyle=colorPalette[18];              
+                visibleContext.fillStyle=colorPalette[18];
               }
-            } 
-            visibleContext.fillRect(i*zoom,j*zoom,zoom,zoom);        
+            }
+            visibleContext.fillRect(i*zoom,j*zoom,zoom,zoom);
           }
         }
         return;
@@ -1412,10 +1504,10 @@ function ballCollides(){
           visibleContext.fillStyle=colorPalette[pixelIndex];
           if (pixelIndex===bumperCol && bumperHit>=0){
             if (regionCanvas[i+width*j]===bumperHit){
-              visibleContext.fillStyle=colorPalette[18];              
+              visibleContext.fillStyle=colorPalette[18];
             }
-          } 
-          visibleContext.fillRect(i*zoom,j*zoom,zoom,zoom);        
+          }
+          visibleContext.fillRect(i*zoom,j*zoom,zoom,zoom);
         }
       }
 
@@ -1445,6 +1537,16 @@ function ballCollides(){
         winTextInput.value=winText;
       }
       lastBallFrame=Math.floor(ballFrame);
+
+      if (PLAYER!==true&&genAnyThumbnails===true){
+        if (genAllThumbnails===true){
+          for (var i=0;i<layerCount;i++){
+            drawThumbnail(i);
+          }
+        } else {
+            drawThumbnail(canvasIndex);
+        }
+      }
     }
 
 
@@ -1452,17 +1554,17 @@ function ballCollides(){
 
 
   function getCoords(e) {
-    var x,y; 
+    var x,y;
     if(typeof e.offsetX !== "undefined") {
         x = e.offsetX;
         y = e.offsetY;
     }
-    else {      
+    else {
       var target = e.target || e.srcElement;
       var rect = target.getBoundingClientRect();
       x = e.clientX - rect.left,
       y = e.clientY - rect.top;
-    } 
+    }
     return [x,y];
   }
 
@@ -1504,7 +1606,7 @@ function ballCollides(){
     startTargetY=coords[1];
     lastX=Math.floor(-1+startTargetX/zoomFactor);
     lastY=Math.floor(-1+startTargetY/zoomFactor);
-    
+
     preserveUndoState();
     mouseMove(e,e.type==="mousedown");
     if(radius===0){
@@ -1586,7 +1688,7 @@ function eraserDraw(x,y){
     if (px>=0&&px<width&&py>=0&&py<height){
       masterCanvas[px+width*py]=eraserCol;
     }
-  }   
+  }
 }
 
 function wallDraw(x,y){
@@ -1598,7 +1700,7 @@ function wallDraw(x,y){
     if (px>=0&&px<width&&py>=0&&py<height){
       masterCanvas[px+width*py]=wallCol;
     }
-  }   
+  }
 }
 
 function bumperDraw(x,y){
@@ -1610,7 +1712,7 @@ function bumperDraw(x,y){
     if (px>=0&&px<width&&py>=0&&py<height){
       masterCanvas[px+width*py]=bumperCol;
     }
-  }   
+  }
 }
 
 function flipperDraw(x,y){
@@ -1626,7 +1728,7 @@ function flipperDraw(x,y){
         masterCanvas[px+width*py]=flipperCol;
         }
     }
-  }   
+  }
 
 
   neighbours=[[x+1,y],[x,y+1],[x-1,y],[x,y-1]];
@@ -1642,7 +1744,7 @@ function flipperDraw(x,y){
       var val = masterCanvas[nx+width*ny];
       if (  val===leftFlipperPivotCol   ||
             val===rightFlipperPivotCol  ||
-            val===flipperCol 
+            val===flipperCol
           ) {
         if (foundflipper){
           masterCanvas[nx+width*ny]=flipperCol;
@@ -1699,7 +1801,7 @@ function leftFlipperPivotDraw(x,y){
       var val = masterCanvas[nx+width*ny];
       if (  val===leftFlipperPivotCol   ||
             val===rightFlipperPivotCol  ||
-            val===flipperCol 
+            val===flipperCol
           ) {
         masterCanvas[nx+width*ny]=flipperCol;
         fillCanvas[nx+width*ny]=1;
@@ -1736,7 +1838,7 @@ function rightFlipperPivotDraw(x,y){
       masterCanvas[nx+width*ny]=flipperCol;
     }
   }
-  
+
   fillCanvas[px+width*py]=1;
   for(var i=0;i<neighbours.length;i++){
     var n = neighbours[i];
@@ -1746,7 +1848,7 @@ function rightFlipperPivotDraw(x,y){
       var val = masterCanvas[nx+width*ny];
       if (  val===leftFlipperPivotCol   ||
             val===rightFlipperPivotCol  ||
-            val===flipperCol 
+            val===flipperCol
           ) {
         masterCanvas[nx+width*ny]=flipperCol;
         fillCanvas[nx+width*ny]=1;
@@ -1813,7 +1915,7 @@ function connectionDraw(x,y){
     if (px>=0&&px<width&&py>=0&&py<height){
       masterCanvas[px+width*py]=connectionCol;
     }
-  }   
+  }
 }
 
 function targetDraw(x,y){
@@ -1825,7 +1927,7 @@ function targetDraw(x,y){
     if (px>=0&&px<width&&py>=0&&py<height){
       masterCanvas[px+width*py]=targetCol;
     }
-  }   
+  }
 
 }
 
@@ -1838,7 +1940,7 @@ function togglableWallDraw(x,y){
     if (px>=0&&px<width&&py>=0&&py<height){
       masterCanvas[px+width*py]=togglableWallCol;
     }
-  }   
+  }
 }
 
 function togglableWallDisabledDraw(x,y){
@@ -1850,7 +1952,7 @@ function togglableWallDisabledDraw(x,y){
     if (px>=0&&px<width&&py>=0&&py<height){
       masterCanvas[px+width*py]=togglableWallDisabledCol;
     }
-  }   
+  }
 }
 
 function springDraw(x,y){
@@ -1862,7 +1964,7 @@ function springDraw(x,y){
     if (px>=0&&px<width&&py>=0&&py<height){
       masterCanvas[px+width*py]=springCol;
     }
-  }   
+  }
 }
 
 function exitPointDraw(x,y){
@@ -1958,7 +2060,7 @@ function exitPointDraw(x,y){
      var p=points[i];
      brushFn(p[0],p[1]);
     }
-  
+
 
     var basicCanvas = canvasses[0];
     for (var i=0;i<basicCanvas.length;i++){
@@ -1969,16 +2071,16 @@ function exitPointDraw(x,y){
     context.lineWidth = 0;
     context.fillStyle = 'green';
     context.fill();*/
-    setVisuals();
+    setVisuals(true);
 
     var coords = getCoords(e);
     lastX=Math.floor(-1+coords[0]/zoomFactor);
     lastY=Math.floor(-1+coords[1]/zoomFactor);
-    
+
     lastDrawPosX=x;
     lastDrawPosY=y;
 
-    if (canvasIndex!==0){
+    if (stateIndex!==0){
       compile();
     }
   }
@@ -1988,7 +2090,7 @@ function exitPointDraw(x,y){
     boundingBoxes = {};
     pivotPoints = {};
     exitTriggered=false;
-    
+
     for (var i=0;i<width*height;i++){
       regionCanvas[i]=0;
     }
@@ -2042,7 +2144,7 @@ function exitPointDraw(x,y){
 
     if (exitPointCount===0){
       exitPointX=-10000;
-      exitPointY=-10000; 
+      exitPointY=-10000;
     } else {
       exitPointX/=exitPointCount;
       exitPointY/=exitPointCount;
@@ -2072,7 +2174,21 @@ function exitPointDraw(x,y){
       }
     }
 
-    setVisuals();
+    setVisuals(true);
+    gameLevelCount=1;
+    for (var i=1;i<layerCount;i++){
+      var can=levelCanvasses[i];
+      for (var j=0;j<width*height;j++){
+        if (can[j]!==0){
+          gameLevelCount++;
+          break;
+        }
+      }
+      if (gameLevelCount===i){
+        break;
+      }
+    }
+    console.log("level count = "+gameLevelCount);
   }
 
   function setScoreText(includeHighScore){
@@ -2097,7 +2213,7 @@ function exitPointDraw(x,y){
 
   function fillRegion(x,y,regionNumber){
     var originCol=masterCanvas[x+width*y];
-    var originFlipper = 
+    var originFlipper =
       originCol===leftFlipperPivotCol ||
       originCol===rightFlipperPivotCol ||
       originCol===flipperCol;
@@ -2106,7 +2222,7 @@ function exitPointDraw(x,y){
      pivotPoints[regionNumber]=[x,y,1];
     } else if (originCol===rightFlipperPivotCol){
      pivotPoints[regionNumber]=[x,y,2];
-    } 
+    }
 
     regionCoordIndex=x+width*y;
     regionCanvas[regionCoordIndex]=regionNumber;
@@ -2193,7 +2309,7 @@ function exitPointDraw(x,y){
       }
       var bbox = boundingBoxes[regionNumber];
       var bottomy=bbox[3];
-      for (var x=bbox[0];x<=bbox[2];x++){      
+      for (var x=bbox[0];x<=bbox[2];x++){
         for (var y=bbox[1];y<=bbox[3];y++){
           var i = x+width*y;
           if (regionCanvas[i]===regionNumber){
@@ -2208,16 +2324,16 @@ function exitPointDraw(x,y){
       }
     }
   }
-  
+
   function generateSweepSprings(
-    sourceCanvasIndex,
-    targetCanvasIndex
+    sourcestateIndex,
+    targetstateIndex
     ) {
 
-    var sourceCanvas=canvasses[sourceCanvasIndex];
-    var targetCanvas= canvasses[targetCanvasIndex];
-    var targetSweepArea = sweepAreas[sourceCanvasIndex][targetCanvasIndex];
-    var targetSweepAreaInverse = sweepAreas[targetCanvasIndex][sourceCanvasIndex];
+    var sourceCanvas=canvasses[sourcestateIndex];
+    var targetCanvas= canvasses[targetstateIndex];
+    var targetSweepArea = sweepAreas[sourcestateIndex][targetstateIndex];
+    var targetSweepAreaInverse = sweepAreas[targetstateIndex][sourcestateIndex];
 
     for (var regionNumberStr in boundingBoxes){
       var regionNumber=Number(regionNumberStr);
@@ -2229,8 +2345,8 @@ function exitPointDraw(x,y){
       var topy=bbox[1];
       var bheight=bottomy-topy;
 
-      for (var x=bbox[0];x<=bbox[2];x++){      
-        for (var y=bbox[1];y<=bbox[3];y++){          
+      for (var x=bbox[0];x<=bbox[2];x++){
+        for (var y=bbox[1];y<=bbox[3];y++){
           var i = x+width*y;
           if (regionCanvas[i]===regionNumber){
             var altitude = bottomy-y;
@@ -2264,7 +2380,7 @@ function exitPointDraw(x,y){
             for (var j=0;j<linePoints.length;j++){
               var lp=linePoints[j];
               var lpx=lp[0];
-              var lpy=lp[1];              
+              var lpy=lp[1];
               var index3 = lpx+width*lpy;
               targetSweepArea[index3]=targetindex;
               targetSweepAreaInverse[index3]=sourceindex;
@@ -2287,9 +2403,9 @@ function exitPointDraw(x,y){
     var sourceCanvas = canvasses[sourceIndex];
     var leftTargetCanvas =                  targetLeftIndex>=0  ? canvasses[targetLeftIndex]                  : null;
     var rightTargetCanvas =                 targetRightIndex>=0 ? canvasses[targetRightIndex]                 : null;
-    var leftTargetSweepCanvas =             targetLeftIndex>=0  ? sweepAreas[sourceIndex][targetLeftIndex]    : null; 
+    var leftTargetSweepCanvas =             targetLeftIndex>=0  ? sweepAreas[sourceIndex][targetLeftIndex]    : null;
     var rightTargetSweepCanvas =            targetRightIndex>=0 ? sweepAreas[sourceIndex][targetRightIndex]   : null;
-    var leftTargetInverseSweepCanvas =      targetLeftIndex>=0  ? sweepAreas[targetLeftIndex][sourceIndex]    : null; 
+    var leftTargetInverseSweepCanvas =      targetLeftIndex>=0  ? sweepAreas[targetLeftIndex][sourceIndex]    : null;
     var rightTargetInverseSweepCanvas =     targetRightIndex>=0 ? sweepAreas[targetRightIndex][sourceIndex]   : null;
 
   //step 1 - generate for just going to flip left/right from resting
@@ -2323,7 +2439,7 @@ function exitPointDraw(x,y){
         var px=ppoint[0];
         var py=ppoint[1];
         theta=Math.PI*targetAngle/180.0;
-        for (var x=bbox[0];x<=bbox[2];x++){      
+        for (var x=bbox[0];x<=bbox[2];x++){
           for (var y=bbox[1];y<=bbox[3];y++){
             var i = x+width*y;
             if (regionCanvas[i]===regionNumber){
@@ -2335,7 +2451,7 @@ function exitPointDraw(x,y){
               var targety=Math.round(targetyExact);
 
               var diff=-1;
-              
+
               if (orientation===1){
                 if (targetxExact<px){
                   diff=+1;
@@ -2372,7 +2488,7 @@ function exitPointDraw(x,y){
               for (var j=0;j<linePoints.length;j++){
                 var lp=linePoints[j];
                 var lpx=lp[0];
-                var lpy=lp[1];              
+                var lpy=lp[1];
                 var index3 = lpx+width*lpy;
                 targetSweepArea[index3]=targetindex;
                 //canvasses[0][index3]=8;
@@ -2489,7 +2605,7 @@ function exitPointDraw(x,y){
       var px=ppoint[0];
       var py=ppoint[1];
       theta=Math.PI*targetAngle/180.0;
-      for (var x=bbox[0];x<=bbox[2];x++){      
+      for (var x=bbox[0];x<=bbox[2];x++){
         for (var y=bbox[1];y<=bbox[3];y++){
           var i = x+width*y;
           if (regionCanvas[i]===regionNumber){
@@ -2538,7 +2654,7 @@ function exitPointDraw(x,y){
 
     mainPaletteOffset = (mainPaletteOffset+colCount+offset)%colCount;
     colorPalette = [];
-    for (var i=1;i<sourcePalette.length;i++){      
+    for (var i=1;i<sourcePalette.length;i++){
       colorPalette[i]=sourcePalette[((i+mainPaletteOffset-1)%colCount)+1]
     }
     colorPalette[0]=colorPalette[1];
@@ -2547,7 +2663,7 @@ function exitPointDraw(x,y){
     var coloredElements = document.querySelectorAll("[id^=color_]");
     for(var queryIndex = 0; queryIndex < coloredElements.length; queryIndex ++){
       var elem = coloredElements[queryIndex];
-      if (elem!==null){       
+      if (elem!==null){
         var i = Number(elem.id.match(/color_([0-9]+)/)[1]);
         elem.style.backgroundColor=colorPalette[i];
         colorElem[i]=elem;
@@ -2558,7 +2674,7 @@ function exitPointDraw(x,y){
         elem.style.backgroundColor=colorPalette[0];
     }
 
-    setVisuals();
+    setVisuals(true,true);
   }
 
   function calcHalo(){
@@ -2579,7 +2695,7 @@ function exitPointDraw(x,y){
             if (v===bumperCol){
               masterCanvas[x+width*y]=bumperAuraCol;
               break;
-            } 
+            }
           }
         }
       }
@@ -2607,7 +2723,7 @@ function exitPointDraw(x,y){
         canvas[pIndex]=colorIndex;
         borderPoints = [[p[0]+1,p[1]],[p[0]-1,p[1]],[p[0],p[1]+1],[p[0],p[1]-1]];
         for (var j=0;j<borderPoints.length;j++){
-          var borderPoint=borderPoints[j]; 
+          var borderPoint=borderPoints[j];
           var borderpx=borderPoint[0];
           var borderpy=borderPoint[1];
           var bpi=bpx+width*bpy;
