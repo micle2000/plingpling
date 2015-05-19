@@ -319,7 +319,7 @@ function shareClick() {
     "public" : true,
     "files": {
       "readme.txt" : {
-        "content": "A game made with www.flipcode.org"
+        "content": "A game made with plingpling (www.plingpling.org) forked to shimokura.me/plingpling"
       },
       "game.txt" : {
         "content": str
