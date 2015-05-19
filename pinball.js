@@ -409,15 +409,27 @@ function stateToString(){
   state.version=VERSION;
   for (var i=0;i<layerCount;i++){
     var canvas=levelCanvasses[i];
-    var s="";
-    for (var j=0;j<width*height;j++){
-      s+=canvas[j].toString(16);
-    }
+    var s = arrayToString(canvas);
     var pairs=RLE_encode(s);
     state.canvasses.push(pairs);
   }
   var result=JSON.stringify(state);
   return result;
+}
+
+
+function arrayToString(a){
+  var s = "";
+
+  for(var i = 0; i < a.length; i ++){
+    s += String.fromCharCode(65 + a[i]);
+  }
+
+  return s;
+}
+
+function charToNum(s){
+  return s.charCodeAt(0) - 65;
 }
 
 function findPageName() {
@@ -467,7 +479,7 @@ function stringToState(str){
       var count=s[i];
       var ch=s[i+1];
       for (var j=0;j<count;j++){
-        ar[index]=parseInt(ch,16);
+        ar[index]=charToNum(ch);
         index++;
       }
     }
